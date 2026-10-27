@@ -39,6 +39,7 @@ public sealed class TernSyncService : IAsyncDisposable
     public string Root => root;
     public bool IsRunning { get; private set; }
     public string? LastError { get; private set; }
+    public DateTimeOffset? LastSyncAt { get; private set; }
     public string? DriveLetter => driveLetter;
     public event EventHandler<SyncProgress>? Progress;
     public event EventHandler? StateChanged;
@@ -207,6 +208,7 @@ public sealed class TernSyncService : IAsyncDisposable
             }
 
             LastError = null;
+            LastSyncAt = DateTimeOffset.Now;
             Log.Info($"cloudfiles refresh: cursor={cursor} created={summary.Created} updated={summary.Updated} removed={summary.Removed} conflicts={summary.Conflicts} unchanged={summary.Unchanged}");
             Progress?.Invoke(this, new SyncProgress("已同步", entries.Length, folders.Length, true));
         }

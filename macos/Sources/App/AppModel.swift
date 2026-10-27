@@ -22,6 +22,7 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var syncEnabled = true
     @Published public private(set) var credentialsReady = false
     @Published public private(set) var lastError: String?
+    @Published public private(set) var lastSyncText = "尚未同步"
 
     public let settings: SettingsStore
 
@@ -29,6 +30,7 @@ public final class AppModel: ObservableObject {
     private var started = false
     private var cachedPassword: String?
     private var cachedCredentialKey: String?
+    private var syncClockTimer: Timer?
 
     private init(settings: SettingsStore = SettingsStore.shared) {
         self.settings = settings
@@ -89,6 +91,10 @@ public final class AppModel: ObservableObject {
             fileProviderWatcher.start()
         }
         ShareRequestHandler.shared.start()
+        refreshLastSyncText()
+        syncClockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshLastSyncText() }
+        }
         Task { await UpdateChecker.checkAndNotify() }
 
         if FileProviderShared.loadConfiguration() != nil {
@@ -107,7 +113,31 @@ public final class AppModel: ObservableObject {
     public func shutdown() {
         fileProviderWatcher.stop()
         ShareRequestHandler.shared.stop()
+        syncClockTimer?.invalidate()
+        syncClockTimer = nil
         CDLog.info("app: shutdown")
+    }
+
+    private func refreshLastSyncText() {
+        let last = FileProviderShared.syncStatus().lastSync
+        lastSyncText = AppModel.relativeTime(last)
+    }
+
+    private static func relativeTime(_ date: Date?) -> String {
+        guard let date else { return "尚未同步" }
+        let seconds = max(0, Int(Date().timeIntervalSince(date)))
+        if seconds < 60 { return "\(max(1, seconds))秒前" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)分前" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)小时前" }
+        let days = hours / 24
+        if days < 7 { return "\(days)天前" }
+        let weeks = days / 7
+        if weeks < 5 { return "\(weeks)周前" }
+        let months = days / 30
+        if months < 12 { return "\(months)月前" }
+        return "\(days / 365)年前"
     }
 
     // MARK: - Settings

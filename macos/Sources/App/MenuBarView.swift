@@ -11,41 +11,8 @@ struct MenuBarView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        Group {
-            Text("Tern")
-            Text(model.statusHeadline)
-                .font(.headline)
-            if let detail = model.statusDetail {
-                Text(detail)
-                    .font(.caption)
-            }
-            Text("服务器：\(model.serverURLText)")
-                .font(.caption)
-            if !model.credentialsReady {
-                Text("⚠️ 尚未保存密码，请在设置中填写")
-                    .font(.caption)
-            }
-            if let error = model.lastError, FileProviderShared.loadConfiguration() != nil {
-                Text("错误：\(error)")
-                    .font(.caption)
-            }
-        }
-
-        let sync = FileProviderShared.syncStatus()
-        if sync.pending > 0 || sync.error != nil {
-            Divider()
-            Text("File Provider")
-                .font(.caption)
-            if sync.pending > 0 {
-                Text("待上传：\(sync.pending) 项")
-                    .font(.caption)
-            }
-            if let error = sync.error {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-        }
+        Text("最近同步时间：\(model.lastSyncText)")
+            .font(.caption)
 
         Divider()
 
@@ -53,7 +20,7 @@ struct MenuBarView: View {
             Button(model.syncEnabled ? "断开同步" : "启用同步") {
                 model.toggleSync()
             }
-            Button("在 Finder 中打开") {
+            Button("打开 Tern") {
                 model.openInFinder()
             }
         } else {

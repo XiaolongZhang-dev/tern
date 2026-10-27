@@ -4,19 +4,29 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-10-27
+
+### Changed
+
+- macOS and Windows tray menus now display a relative "最近同步时间"
+  (seconds/minutes/hours/days/weeks/months/years).
+- Removed redundant header/status lines from both menus and aligned the
+  remaining menu items across macOS and Windows.
+
 ## [Unreleased]
 
 ### Planned
 
 See [ROADMAP.md](ROADMAP.md) for the prioritized backlog.
 
-## [Unreleased]
+## [1.4.2] - 2026-10-27
 
-### Added
+### Changed
 
-- macOS menu-bar **断开同步 / 启用同步** control. Pausing stops the long-poll
-  watcher and prevents the File Provider extension from making network
-  requests, while keeping downloaded files available in Finder.
+- macOS and Windows tray menus now display a relative "最近同步时间"
+  (seconds/minutes/hours/days/weeks/months/years).
+- Removed redundant header/status lines from both menus and aligned the
+  remaining menu items across macOS and Windows.
 
 ## [1.4.1] - 2026-10-24
 

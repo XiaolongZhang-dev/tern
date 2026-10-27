@@ -8,7 +8,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly SettingsStore _store = new();
     private readonly NotifyIcon _notifyIcon;
-    private readonly ToolStripMenuItem _statusItem;
+    private readonly ToolStripMenuItem _lastSyncItem;
     private readonly ToolStripMenuItem _connectItem;
     private readonly ToolStripMenuItem _openItem;
     private readonly System.Windows.Forms.Timer _stateTimer;
@@ -32,21 +32,21 @@ public sealed class TrayApplicationContext : ApplicationContext
         _sync.Progress += (_, progress) => Log.Info("sync: " + progress.Message);
         _sync.StateChanged += (_, _) => UpdateMenu();
 
-        _statusItem = new ToolStripMenuItem("未启用") { Enabled = false };
+        _lastSyncItem = new ToolStripMenuItem("最近同步时间：尚未同步") { Enabled = false };
         _connectItem = new ToolStripMenuItem("启用同步", null, async (_, _) => await ToggleAsync(true));
         _openItem = new ToolStripMenuItem("打开 Tern", null, (_, _) => OpenLocation()) { Enabled = false };
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add(new ToolStripMenuItem("Tern") { Enabled = false });
-        menu.Items.Add(_statusItem);
+        menu.Items.Add(_lastSyncItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_connectItem);
         menu.Items.Add(_openItem);
+        menu.Items.Add(new ToolStripMenuItem("设置…", null, (_, _) => ShowSettings()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("发送剪贴板到 Tern", null, async (_, _) => await SendClipboardAsync()));
         menu.Items.Add(new ToolStripMenuItem("从 Tern 获取剪贴板", null, async (_, _) => await FetchClipboardAsync()));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("设置…", null, (_, _) => ShowSettings()));
+        menu.Items.Add(new ToolStripMenuItem("复制服务器地址", null, (_, _) => CopyServerAddress()));
         menu.Items.Add(new ToolStripMenuItem("打开日志", null, (_, _) => Log.OpenLog()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("退出 Tern", null, (_, _) => ExitApplication()));
@@ -244,12 +244,48 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
 
         var location = _sync.DriveLetter is { Length: 1 } letter ? letter + ":" : _sync.Root;
-        _statusItem.Text = running ? "已启用 · " + location : (_lastError is null ? "未启用" : "错误：" + _lastError);
+        _lastSyncItem.Text = "最近同步时间：" + RelativeTime(_sync.LastSyncAt);
         _connectItem.Text = running ? "断开同步" : "启用同步";
         _connectItem.Enabled = !_busy;
         _openItem.Enabled = running;
         var text = running ? "Tern · " + location : "Tern · 未启用";
         _notifyIcon.Text = text.Length > 63 ? text[..63] : text;
+    }
+
+    private void CopyServerAddress()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_settings.ServerUrl))
+            {
+                Notify("Tern", "尚未配置服务器地址。", ToolTipIcon.Info);
+                return;
+            }
+            Clipboard.SetText(_settings.ServerUrl);
+            Notify("Tern", "服务器地址已复制。", ToolTipIcon.Info);
+        }
+        catch (Exception exception)
+        {
+            Log.Warn("copy server address failed: " + exception.Message);
+        }
+    }
+
+    private static string RelativeTime(DateTimeOffset? timestamp)
+    {
+        if (timestamp is null) return "尚未同步";
+        var seconds = Math.Max(0, (long)(DateTimeOffset.Now - timestamp.Value).TotalSeconds);
+        if (seconds < 60) return Math.Max(1, seconds) + "秒前";
+        var minutes = seconds / 60;
+        if (minutes < 60) return minutes + "分前";
+        var hours = minutes / 60;
+        if (hours < 24) return hours + "小时前";
+        var days = hours / 24;
+        if (days < 7) return days + "天前";
+        var weeks = days / 7;
+        if (weeks < 5) return weeks + "周前";
+        var months = days / 30;
+        if (months < 12) return months + "月前";
+        return (days / 365) + "年前";
     }
 
     private void OpenLocation()
