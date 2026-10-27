@@ -10,7 +10,7 @@
     <RootNamespace>Tern.Windows</RootNamespace>
     <ApplicationIcon>Assets\tern.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.4.2</Version>
+    <Version>1.4.3</Version>
     <Authors>Tern contributors</Authors>
     <Company>Tern</Company>
     <Product>Tern for Windows</Product>

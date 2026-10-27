@@ -15,6 +15,9 @@ public final class FileProviderWatcher: @unchecked Sendable {
 
     private let lock = NSLock()
     private var task: Task<Void, Never>?
+    /// Called after every successful long-poll return, including a timeout
+    /// with no changes. That is the "last successful check" timestamp.
+    public var onCheck: (@Sendable () -> Void)?
 
     public init() {}
 
@@ -64,6 +67,7 @@ public final class FileProviderWatcher: @unchecked Sendable {
                 guard let client else { continue }
                 if let current = cursor {
                     let page = try await client.watch(cursor: current, timeout: 25)
+                    onCheck?()
                     if page.changed {
                         cursor = page.cursor
                         signalFileProvider()
@@ -71,6 +75,7 @@ public final class FileProviderWatcher: @unchecked Sendable {
                 } else {
                     let head = try await client.watch(cursor: nil, timeout: 25)
                     cursor = head.cursor
+                    onCheck?()
                     signalFileProvider()
                 }
             } catch {

@@ -31,6 +31,7 @@ public final class AppModel: ObservableObject {
     private var cachedPassword: String?
     private var cachedCredentialKey: String?
     private var syncClockTimer: Timer?
+    private var lastCheckAt: Date?
 
     private init(settings: SettingsStore = SettingsStore.shared) {
         self.settings = settings
@@ -87,6 +88,8 @@ public final class AppModel: ObservableObject {
         refreshCredentialState()
         fileProviderEnabled = FileProviderShared.loadConfiguration() != nil
         syncEnabled = FileProviderShared.isSyncEnabled
+        lastCheckAt = FileProviderShared.syncStatus().lastSync
+        configureWatcher()
         if fileProviderEnabled && syncEnabled {
             fileProviderWatcher.start()
         }
@@ -118,8 +121,23 @@ public final class AppModel: ObservableObject {
         CDLog.info("app: shutdown")
     }
 
+    private func configureWatcher() {
+        fileProviderWatcher.onCheck = { [weak self] in
+            Task { @MainActor in
+                self?.lastCheckAt = Date()
+                self?.refreshLastSyncText()
+            }
+        }
+    }
+
     private func refreshLastSyncText() {
-        let last = FileProviderShared.syncStatus().lastSync
+        let sharedLast = FileProviderShared.syncStatus().lastSync
+        let last: Date?
+        if let lastCheckAt, let sharedLast {
+            last = max(lastCheckAt, sharedLast)
+        } else {
+            last = lastCheckAt ?? sharedLast
+        }
         lastSyncText = AppModel.relativeTime(last)
     }
 
@@ -378,6 +396,7 @@ public final class AppModel: ObservableObject {
         FileProviderShared.setSyncEnabled(enabled)
         if enabled {
             if FileProviderShared.loadConfiguration() != nil {
+                configureWatcher()
                 fileProviderWatcher.start()
                 FileProviderBridge.signalChanges()
             }

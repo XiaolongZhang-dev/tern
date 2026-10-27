@@ -1,5 +1,5 @@
 #define MyAppName "Tern"
-#define MyAppVersion "1.4.2"
+#define MyAppVersion "1.4.3"
 #define MyAppPublisher "Tern contributors"
 #define MyAppExeName "Tern.exe"
 

@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2026-10-27
+
+### Changed
+
+- "最近同步时间" now means the last successful *check*, including a
+  long-poll timeout with no changes. Pausing sync freezes the timestamp.
+
 ## [1.4.2] - 2026-10-27
 
 ### Changed
@@ -18,6 +25,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Planned
 
 See [ROADMAP.md](ROADMAP.md) for the prioritized backlog.
+
+## [1.4.3] - 2026-10-27
+
+### Changed
+
+- "最近同步时间" now means the last successful *check*, including a
+  long-poll timeout with no changes. Pausing sync freezes the timestamp.
 
 ## [1.4.2] - 2026-10-27
 

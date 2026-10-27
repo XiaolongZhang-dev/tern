@@ -343,6 +343,7 @@ public sealed class TernSyncService : IAsyncDisposable
             {
                 if (backend is null) return;
                 var updated = await backend.WatchAsync(cursor, cancellationToken).ConfigureAwait(false);
+                LastSyncAt = DateTimeOffset.Now;
                 if (updated != cursor)
                 {
                     await RefreshAsync(cancellationToken).ConfigureAwait(false);

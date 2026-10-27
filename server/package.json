@@ -1,6 +1,6 @@
 {
   "name": "tern-server",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "private": true,
   "description": "Tern / Tern — self-hosted personal cloud drive: REST API, WebDAV and SPA hosting in one Node process.",
   "license": "MIT",
