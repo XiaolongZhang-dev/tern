@@ -31,6 +31,7 @@ public final class AppModel: ObservableObject {
     private var cachedPassword: String?
     private var cachedCredentialKey: String?
     private var syncClockTimer: Timer?
+    private var syncRefreshTimer: Timer?
     private var lastCheckAt: Date?
 
     private init(settings: SettingsStore = SettingsStore.shared) {
@@ -95,9 +96,17 @@ public final class AppModel: ObservableObject {
         }
         ShareRequestHandler.shared.start()
         refreshLastSyncText()
-        syncClockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        // Relative time must keep ticking while the menu is open. A default-mode
+        // Timer stops during menu tracking, so add both timers to .common.
+        // 3 seconds matches the Windows client refresh cadence.
+        syncClockTimer = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshRelativeTextOnly() }
+        }
+        if let syncClockTimer { RunLoop.main.add(syncClockTimer, forMode: .common) }
+        syncRefreshTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshLastSyncText() }
         }
+        if let syncRefreshTimer { RunLoop.main.add(syncRefreshTimer, forMode: .common) }
         Task { await UpdateChecker.checkAndNotify() }
 
         if FileProviderShared.loadConfiguration() != nil {
@@ -118,6 +127,8 @@ public final class AppModel: ObservableObject {
         ShareRequestHandler.shared.stop()
         syncClockTimer?.invalidate()
         syncClockTimer = nil
+        syncRefreshTimer?.invalidate()
+        syncRefreshTimer = nil
         CDLog.info("app: shutdown")
     }
 
@@ -132,13 +143,14 @@ public final class AppModel: ObservableObject {
 
     private func refreshLastSyncText() {
         let sharedLast = FileProviderShared.syncStatus().lastSync
-        let last: Date?
-        if let lastCheckAt, let sharedLast {
-            last = max(lastCheckAt, sharedLast)
-        } else {
-            last = lastCheckAt ?? sharedLast
+        if let sharedLast, lastCheckAt == nil || sharedLast > lastCheckAt! {
+            lastCheckAt = sharedLast
         }
-        lastSyncText = AppModel.relativeTime(last)
+        refreshRelativeTextOnly()
+    }
+
+    private func refreshRelativeTextOnly() {
+        lastSyncText = AppModel.relativeTime(lastCheckAt)
     }
 
     private static func relativeTime(_ date: Date?) -> String {
