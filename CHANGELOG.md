@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.4] - 2026-10-27
+
+### Fixed
+
+- macOS "最近同步时间" now refreshes every 3 seconds while the menu is open,
+  matching the Windows client cadence. The timer runs in the common RunLoop
+  mode so menu tracking does not suspend it.
+
 ## [1.4.3] - 2026-10-27
 
 ### Changed
@@ -25,6 +33,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Planned
 
 See [ROADMAP.md](ROADMAP.md) for the prioritized backlog.
+
+## [1.4.4] - 2026-10-27
+
+### Fixed
+
+- macOS "最近同步时间" now refreshes every 3 seconds while the menu is open,
+  matching the Windows client cadence. The timer runs in the common RunLoop
+  mode so menu tracking does not suspend it.
 
 ## [1.4.3] - 2026-10-27
 
