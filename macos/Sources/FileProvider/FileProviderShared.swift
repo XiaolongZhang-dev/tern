@@ -2,13 +2,16 @@
 //  FileProviderShared.swift
 //  Shared between the menu-bar app and the File Provider extension.
 //
-//  A free Personal Team cannot provision App Groups, so connection metadata,
-//  sync status and pinned items live in small shared Keychain items instead.
-//  File contents and the metadata cache stay inside the extension container.
+//  A free Personal Team cannot provision App Groups, and `keychain-access-groups`
+//  is a restricted entitlement that only a profile-backed signature may carry
+//  (AMFI rejects ad-hoc signed binaries that claim it).  So connection metadata,
+//  sync status, pinned items and the password live in small files inside the
+//  extension's own container, which the menu-bar app writes to directly and the
+//  sandboxed extension reads as its own home directory.  File contents and the
+//  metadata cache stay inside the extension container as before.
 //
 
 import Foundation
-import Security
 
 public enum FileProviderShared {
 
@@ -102,16 +105,6 @@ public enum FileProviderShared {
 
     // MARK: - Password
 
-    private static func sharedAccessGroup() -> String? {
-        guard let task = SecTaskCreateFromSelf(nil) else { return nil }
-        let value = SecTaskCopyValueForEntitlement(
-            task,
-            "keychain-access-groups" as CFString,
-            nil
-        ) as? [String]
-        return value?.first(where: { $0.hasSuffix(".shared") })
-    }
-
     private static func account(serverURL: URL, username: String) -> String {
         let host = serverURL.host?.lowercased() ?? "unknown-host"
         let port = serverURL.port ?? (serverURL.scheme == "https" ? 443 : 80)
@@ -154,31 +147,14 @@ public enum FileProviderShared {
         )
     }
 
-    /// The extension and menu-bar app have different code signatures, so a
-    /// plain Keychain item triggers an ACL prompt. Create it with both apps as
-    /// trusted applications so Finder actions never ask for the login password.
+    /// A Finder action is handed over through the shared directory, so neither
+    /// side needs a Keychain ACL that names both code signatures.
     private static let shareRequestService = "com.tern.menubar.fileprovider.shareRequest"
 
     public static func saveShareRequest(nodeId: String, name: String) {
         guard let data = try? JSONEncoder().encode(ShareRequest(nodeId: nodeId, name: name)) else { return }
         delete(service: shareRequestService, account: "pending")
-
-        var trusted: [SecTrustedApplication] = []
-        if let selfApp = trustedApplication(path: nil) { trusted.append(selfApp) }
-        if let appPath = mainAppPath(),
-           let app = trustedApplication(path: appPath) { trusted.append(app) }
-
-        var access: SecAccess?
-        let descriptor = "Tern share request" as CFString
-        if SecAccessCreate(descriptor, trusted as CFArray, &access) != errSecSuccess {
-            access = nil
-        }
-
-        var attributes = query(service: shareRequestService, account: "pending")
-        attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        if let access { attributes[kSecAttrAccess as String] = access }
-        _ = SecItemAdd(attributes as CFDictionary, nil)
+        _ = write(data, service: shareRequestService, account: "pending")
     }
 
     /// Read and remove the pending request so one Finder action is handled once.
@@ -186,29 +162,6 @@ public enum FileProviderShared {
         guard let data = read(service: shareRequestService, account: "pending") else { return nil }
         delete(service: shareRequestService, account: "pending")
         return try? JSONDecoder().decode(ShareRequest.self, from: data)
-    }
-
-    private static func trustedApplication(path: String?) -> SecTrustedApplication? {
-        var application: SecTrustedApplication?
-        let status: OSStatus
-        if let path {
-            status = path.withCString { cPath in
-                SecTrustedApplicationCreateFromPath(cPath, &application)
-            }
-        } else {
-            status = SecTrustedApplicationCreateFromPath(nil, &application)
-        }
-        return status == errSecSuccess ? application : nil
-    }
-
-    private static func mainAppPath() -> String? {
-        // .../Tern.app/Contents/PlugIns/TernFileProvider.appex
-        var url = Bundle.main.bundleURL
-        guard url.pathExtension == "appex" else { return nil }
-        url.deleteLastPathComponent() // PlugIns
-        url.deleteLastPathComponent() // Contents
-        url.deleteLastPathComponent() // Tern.app
-        return url.path
     }
 
     // MARK: - Finder Sync action bridge
@@ -242,46 +195,70 @@ public enum FileProviderShared {
         return try? JSONDecoder().decode(FinderAction.self, from: data)
     }
 
-    // MARK: - Keychain helpers
+    // MARK: - Shared file store
+    //
+    // Everything used to be a small Keychain item.  Keychain sharing needs the
+    // `keychain-access-groups` entitlement, which AMFI only honours for
+    // profile-backed signatures, so a locally signed (ad-hoc) build could never
+    // hand credentials to its own extension.  A directory inside the extension
+    // container removes that requirement: the menu-bar app is not sandboxed and
+    // writes to the same path the extension sees as its home directory.
 
-    private static func query(service: String, account: String) -> [String: Any] {
-        var value: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        if let group = sharedAccessGroup() {
-            value[kSecAttrAccessGroup as String] = group
+    /// `/…/Library/Containers/com.tern.menubar.FileProvider/Data/Library/Application Support/TernShared`
+    private static var sharedDirectoryURL: URL {
+        let home = NSHomeDirectory()
+        let containerHome = home.contains("/Library/Containers/")
+            ? home
+            : home + "/Library/Containers/\(extensionBundleIdentifier)/Data"
+        return URL(fileURLWithPath: containerHome)
+            .appendingPathComponent("Library/Application Support/TernShared", isDirectory: true)
+    }
+
+    private static func fileURL(service: String, account: String) -> URL {
+        let safeAccount = String(account.map { character -> Character in
+            character.isLetter || character.isNumber || character == "." || character == "-"
+                ? character
+                : "_"
+        })
+        return sharedDirectoryURL
+            .appendingPathComponent("\(service)--\(safeAccount)--\(stableHash(service + "\u{1F}" + account)).bin")
+    }
+
+    private static func stableHash(_ value: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325     // FNV-1a
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
         }
-        return value
+        return String(hash, radix: 16)
     }
 
     private static func read(service: String, account: String) -> Data? {
-        var value = query(service: service, account: account)
-        value[kSecReturnData as String] = true
-        value[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(value as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
+        try? Data(contentsOf: fileURL(service: service, account: account))
     }
 
     @discardableResult
     private static func write(_ data: Data, service: String, account: String) -> Bool {
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-        ]
-        let base = query(service: service, account: account)
-        let update = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
-        if update == errSecSuccess { return true }
-        if update != errSecItemNotFound { return false }
-        var add = base
-        add.merge(attributes) { _, new in new }
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        let url = fileURL(service: service, account: account)
+        let directory = url.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            try data.write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return true
+        } catch {
+            return false
+        }
     }
 
     @discardableResult
     private static func delete(service: String, account: String) -> Bool {
-        SecItemDelete(query(service: service, account: account) as CFDictionary) == errSecSuccess
+        do {
+            try FileManager.default.removeItem(at: fileURL(service: service, account: account))
+            return true
+        } catch {
+            return false
+        }
     }
 }

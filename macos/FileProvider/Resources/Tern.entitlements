@@ -2,9 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>keychain-access-groups</key>
-	<array>
-		<string>$(AppIdentifierPrefix)com.tern.menubar.shared</string>
-	</array>
+	<!-- No restricted entitlements: the app and its File Provider extension
+	     share configuration through a file in the extension container, so a
+	     locally signed (ad-hoc) build runs without a provisioning profile. -->
 </dict>
 </plist>

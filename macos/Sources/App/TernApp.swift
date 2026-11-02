@@ -284,7 +284,13 @@ enum CommandLineModes {
         lines.append("bundle: \(Bundle.main.bundleURL.path)")
         lines.append("executable: \(Bundle.main.executableURL?.path ?? "?")")
         lines.append("macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
+        #if arch(x86_64)
+        lines.append("arch: x86_64 (compiled)")
+        #elseif arch(arm64)
         lines.append("arch: arm64 (compiled)")
+        #else
+        lines.append("arch: unknown (compiled)")
+        #endif
         let serverURL = (try? settings.validatedServerURL())?.absoluteString ?? settings.serverURLText
         lines.append("server: \(serverURL)")
         lines.append("user: \(settings.username.isEmpty ? "(未设置)" : settings.username)")
@@ -329,7 +335,7 @@ extension CommandLineModes {
                 }
                 FileProviderShared.saveConfiguration(serverURL: url, username: username)
                 guard FileProviderShared.savePassword(password, serverURL: url, username: username) else {
-                    FileHandle.standardError.write(Data("错误：无法写入共享钥匙串。\n".utf8))
+                    FileHandle.standardError.write(Data("错误：无法写入共享配置（扩展容器不可写）。\n".utf8))
                     exit(1)
                 }
                 try await FileProviderBridge.addDomain()

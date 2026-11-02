@@ -51,14 +51,42 @@ TEAM=你的TeamID ./build-xcode.sh
 
 没有 `TEAM` 时仍可编译用于 CI，但没有签名，File Provider 扩展无法注册。
 
-### 免费 Personal Team
+### 本机运行：ad-hoc 签名（不需要 Apple 账号）
 
-- **不需要 App Groups**。Personal Team 不支持 App Group capability，因此
-  共享配置改存 Keychain；
-- 只需要 **Keychain Sharing**：
-  `$(AppIdentifierPrefix)com.tern.menubar.shared`；
+只想在这台 Mac 上用，不需要分发时，用 ad-hoc 签名即可。它没有 provisioning
+profile，因此**永不过期**：
+
+```bash
+cd macos
+ADHOC=1 ./build-xcode.sh
+ditto .build-xcode/Build/Products/Debug/Tern.app /Applications/Tern.app
+open /Applications/Tern.app
+```
+
+之所以可行，是因为共享配置不再走 Keychain 群组。`keychain-access-groups` 是受限
+entitlement，AMFI 只认由描述文件背书的签名，ad-hoc 二进制只要声明它就会被拒绝执行
+（`The file is adhoc signed but contains restricted entitlements`）。现在 App 与
+扩展改为交换扩展容器里的文件：
+
+```text
+~/Library/Containers/com.tern.menubar.FileProvider/Data/Library/Application Support/TernShared/
+  com.tern.menubar.fileprovider.config--config--<hash>.bin        服务器地址 / 用户名
+  com.tern.menubar.fileprovider--<user>@<host>:<port>--<hash>.bin 密码（0600）
+  …status / pinned / sync / shareRequest
+```
+
+菜单栏 App 未沙盒化，直接写这个目录；扩展被沙盒化，把它当作自己的 home 读取。目录
+权限 `0700`、文件 `0600`，但**密码是明文落盘**——这是用 ad-hoc 换取免账号、免过期
+的代价；需要更强保护就用下面的 Team 签名（配置仍走同一套文件，Keychain 只在
+App 自己存密码时使用）。
+
+### 免费 Personal Team（需要账号，7 天过期）
+
+- 不需要 App Groups，也不需要 Keychain Sharing——共享配置走上面的容器文件；
 - `com.apple.developer.fileprovider.testing-mode` 不可用（Personal Team
   明确不支持），第一次添加 domain 后需要在系统设置里手动启用一次；
+- 免费描述文件有效期只有 **7 天**，过期后 App 无法启动，需要重新
+  `TEAM=你的TeamID ./build-xcode.sh`；
 - 安装：
 
 ```bash

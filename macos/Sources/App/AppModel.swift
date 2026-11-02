@@ -242,10 +242,10 @@ public final class AppModel: ObservableObject {
 
         FileProviderShared.saveConfiguration(serverURL: url, username: username)
         guard FileProviderShared.loadConfiguration() != nil else {
-            return "❌ 无法写入共享 Keychain。请确认应用已使用 Keychain Sharing 签名。"
+            return "❌ 无法写入共享配置。请确认扩展容器目录可访问。"
         }
         guard FileProviderShared.savePassword(password, serverURL: url, username: username) else {
-            return "❌ 无法把密码写入共享钥匙串。请确认应用已使用 Keychain Sharing 签名。"
+            return "❌ 无法把密码写入共享配置（扩展容器不可写）。"
         }
 
         do {

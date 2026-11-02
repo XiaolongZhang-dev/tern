@@ -5,6 +5,7 @@
 #
 #   ./build-xcode.sh             # build .app (unsigned if no team configured)
 #   TEAM=ABCDE12345 ./build-xcode.sh
+#   ADHOC=1 ./build-xcode.sh     # local ad-hoc signature, no account needed
 #   ./build-xcode.sh --clean
 #
 set -euo pipefail
@@ -42,6 +43,16 @@ COMMON=(
 
 if [[ -n "${TEAM:-}" ]]; then
   "$XCODEBUILD" "${COMMON[@]}" DEVELOPMENT_TEAM="$TEAM" CODE_SIGN_STYLE=Automatic -allowProvisioningUpdates build
+elif [[ "${ADHOC:-0}" == "1" ]]; then
+  # Local-only build: ad-hoc signature, no Apple account, no provisioning
+  # profile, never expires.  Works because the app and its extension exchange
+  # configuration through a file in the extension container instead of a
+  # shared Keychain group (that entitlement requires a profile-backed
+  # signature; AMFI rejects ad-hoc binaries claiming it).
+  "$XCODEBUILD" "${COMMON[@]}" \
+    CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" DEVELOPMENT_TEAM="" \
+    PROVISIONING_PROFILE_SPECIFIER="" CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES \
+    build
 else
   # No team on this machine: compile everything, including the extension, but
   # don't attempt to sign or embed a signed extension.
