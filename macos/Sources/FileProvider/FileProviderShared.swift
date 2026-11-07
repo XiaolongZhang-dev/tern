@@ -3,17 +3,23 @@
 //  Shared between the menu-bar app and the File Provider extension.
 //
 //  A free Personal Team cannot provision App Groups, and `keychain-access-groups`
-//  is a restricted entitlement that only a profile-backed signature may carry
-//  (AMFI rejects ad-hoc signed binaries that claim it).  So connection metadata,
-//  sync status, pinned items and the password live in small files inside the
-//  extension's own container, which the menu-bar app writes to directly and the
-//  sandboxed extension reads as its own home directory.  File contents and the
-//  metadata cache stay inside the extension container as before.
+//  is a restricted entitlement that only a profile-backed signature may carry.
+//  So the ad-hoc build uses a loopback-only bridge: the menu-bar app owns the
+//  configuration files and serves the minimum needed config/password over
+//  127.0.0.1; the sandboxed extension fetches it with its network entitlement.
+//  File contents and the metadata cache stay inside the extension container.
 //
 
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 public enum FileProviderShared {
+
+    public static let bridgePort: UInt16 = 47831
+    public static let bridgeToken = "tern-loopback-config-v1"
+    private static var isExtension: Bool { Bundle.main.bundleURL.pathExtension == "appex" }
 
     public static let domainIdentifier = "com.tern.menubar.fileprovider.offline2"
     public static let keychainService = "com.tern.menubar.fileprovider"
@@ -43,6 +49,13 @@ public enum FileProviderShared {
     }
 
     public static func loadConfiguration() -> (serverURL: URL, username: String)? {
+        if isExtension {
+            guard let data = bridge(path: "config"),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                  let server = object["serverURL"], let username = object["username"],
+                  let url = URL(string: server), !username.isEmpty else { return nil }
+            return (url, username)
+        }
         guard let data = read(service: configService, account: "config"),
               let value = try? JSONDecoder().decode(Configuration.self, from: data),
               let url = URL(string: value.serverURL),
@@ -59,6 +72,11 @@ public enum FileProviderShared {
     /// The menu-bar app owns this flag; the extension checks it before any
     /// network request so "断开同步" really stops polling and login attempts.
     public static var isSyncEnabled: Bool {
+        if isExtension {
+            guard let data = bridge(path: "sync"),
+                  let value = String(data: data, encoding: .utf8) else { return true }
+            return value != "0"
+        }
         guard let data = read(service: syncStateService, account: "enabled"),
               let value = String(data: data, encoding: .utf8) else { return true }
         return value != "0"
@@ -117,6 +135,10 @@ public enum FileProviderShared {
     }
 
     public static func loadPassword(serverURL: URL, username: String) -> String? {
+        if isExtension {
+            guard let data = bridge(path: "password") else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
         guard let data = read(service: keychainService, account: account(serverURL: serverURL, username: username)) else {
             return nil
         }
@@ -204,13 +226,57 @@ public enum FileProviderShared {
     // container removes that requirement: the menu-bar app is not sandboxed and
     // writes to the same path the extension sees as its home directory.
 
-    /// `/…/Library/Containers/com.tern.menubar.FileProvider/Data/Library/Application Support/TernShared`
+    /// `~/Library/Application Support/TernShared` (menu-bar app only)
+    private static var lastLaunchAttempt: Date?
+
+    /// Sandboxed extension -> loopback config server owned by the menu app.
+    /// If the menu app is not running, ask LaunchServices to open it once and
+    /// retry briefly. File Provider can be started by the system independently
+    /// of the menu-bar app, so this is the fallback for that case.
+    private static func bridge(path: String) -> Data? {
+        guard isExtension else { return nil }
+        if let data = bridgeRequest(path) { return data }
+
+        let now = Date()
+        if lastLaunchAttempt == nil || now.timeIntervalSince(lastLaunchAttempt!) > 10 {
+            lastLaunchAttempt = now
+            #if canImport(AppKit)
+            if let url = URL(string: "tern://start") {
+                NSWorkspace.shared.open(url)
+            }
+            #endif
+        }
+
+        for _ in 0..<4 {
+            Thread.sleep(forTimeInterval: 0.4)
+            if let data = bridgeRequest(path) { return data }
+        }
+        return nil
+    }
+
+    private static func bridgeRequest(_ path: String) -> Data? {
+        guard let url = URL(string: "http://127.0.0.1:\(bridgePort)/\(path)") else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 0.8
+        request.setValue(bridgeToken, forHTTPHeaderField: "X-Tern-Token")
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Data?
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                result = data
+            }
+            semaphore.signal()
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 1.2)
+        return result
+    }
+
     private static var sharedDirectoryURL: URL {
-        let home = NSHomeDirectory()
-        let containerHome = home.contains("/Library/Containers/")
-            ? home
-            : home + "/Library/Containers/\(extensionBundleIdentifier)/Data"
-        return URL(fileURLWithPath: containerHome)
+        // The menu-bar app owns this path. The sandboxed extension never reads
+        // it directly; it uses the loopback bridge above.
+        let pw = getpwuid(getuid())
+        let home = pw.map { String(cString: $0.pointee.pw_dir) } ?? NSHomeDirectory()
+        return URL(fileURLWithPath: home)
             .appendingPathComponent("Library/Application Support/TernShared", isDirectory: true)
     }
 

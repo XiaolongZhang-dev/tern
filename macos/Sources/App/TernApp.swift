@@ -73,6 +73,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            if url.scheme == "tern", url.host == "share" {
+                ShareRequestHandler.shared.handleShareURL(url)
+            }
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         AppModel.shared.shutdown()
     }
@@ -225,8 +233,11 @@ enum CommandLineModes {
             return 1
         }
         do {
-            try KeychainStore.savePassword(password, serverURL: url, username: username)
-            writeResult("OK: 密码已保存到钥匙串（\(KeychainStore.account(serverURL: url, username: username))）", to: resultFile)
+            guard FileProviderShared.savePassword(password, serverURL: url, username: username) else {
+                writeResult("错误：无法写入共享配置。", to: resultFile)
+                return 1
+            }
+            writeResult("OK: 密码已保存到共享配置（\(username)@\(url.host ?? "?")）", to: resultFile)
             return 0
         } catch {
             writeResult("错误：\(error.localizedDescription)", to: resultFile)
@@ -243,7 +254,7 @@ enum CommandLineModes {
             writeResult("错误：需要 --url 与 --user", to: resultFile)
             return 1
         }
-        let deleted = KeychainStore.deletePassword(serverURL: url, username: username)
+        let deleted = FileProviderShared.deletePassword(serverURL: url, username: username)
         writeResult(deleted ? "OK: 已删除钥匙串密码" : "钥匙串中没有对应密码", to: resultFile)
         return 0
     }
@@ -297,7 +308,7 @@ enum CommandLineModes {
         lines.append("connectAtLogin(defaults): \(settings.connectAtLogin)")
         lines.append("launchAgent: \(LaunchAgentManager.statusDescription())")
         if let url = try? settings.validatedServerURL(), !settings.username.isEmpty {
-            let password = KeychainStore.loadPassword(serverURL: url, username: settings.username)
+            let password = FileProviderShared.loadPassword(serverURL: url, username: settings.username)
             lines.append("keychainPassword: \(password == nil ? "未保存" : "已保存")")
         }
         if let configuration = FileProviderShared.loadConfiguration() {
@@ -327,7 +338,7 @@ extension CommandLineModes {
                 let url = try store.validate()
                 let username = store.username.trimmingCharacters(in: .whitespacesAndNewlines)
                 let password = flags["--password"].flatMap { $0.isEmpty ? nil : $0 }
-                    ?? KeychainStore.loadPassword(serverURL: url, username: username)
+                    ?? FileProviderShared.loadPassword(serverURL: url, username: username)
                     ?? ProcessInfo.processInfo.environment["TERN_PASSWORD"]
                 guard let password, !password.isEmpty else {
                     FileHandle.standardError.write(Data("错误：钥匙串中没有密码，请在 Tern 设置里重新填写并保存。\n".utf8))

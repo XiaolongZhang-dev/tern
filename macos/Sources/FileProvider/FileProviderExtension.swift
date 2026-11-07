@@ -5,6 +5,7 @@
 //
 
 import Foundation
+import AppKit
 import FileProvider
 import UniformTypeIdentifiers
 import Network
@@ -456,8 +457,16 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                     return
                 }
                 let name = store.item(id: identifier.rawValue)?.name ?? "Tern 文件"
-                FileProviderShared.saveShareRequest(nodeId: identifier.rawValue, name: name)
-                FileProviderShared.notifyShareRequest()
+                var components = URLComponents()
+                components.scheme = "tern"
+                components.host = "share"
+                components.queryItems = [
+                    URLQueryItem(name: "nodeId", value: identifier.rawValue),
+                    URLQueryItem(name: "name", value: name),
+                ]
+                if let url = components.url {
+                    NSWorkspace.shared.open(url)
+                }
                 completionHandler(nil)
             default:
                 completionHandler(NSError(

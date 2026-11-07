@@ -2,13 +2,13 @@
 //  AppModel.swift
 //  Tern (Tern) macOS menu-bar client
 //
-//  Owns the File Provider lifecycle and the settings/keychain state.  The
-//  client no longer mounts WebDAV: Finder access goes exclusively through the
-//  replicated File Provider extension, and a long-poll watcher keeps it in
-//  sync with changes made by the web UI or other clients.
+//  Owns the File Provider lifecycle and the settings state.  The ad-hoc build
+//  serves configuration to the sandboxed extension over a loopback-only HTTP
+//  bridge; Finder access goes through the replicated File Provider extension.
 //
 
 import Foundation
+import Network
 import AppKit
 import Combine
 import SwiftUI
@@ -70,10 +70,8 @@ public final class AppModel: ObservableObject {
     }
 
     public var syncStatusText: String {
-        let sync = FileProviderShared.syncStatus()
-        if let error = sync.error, !error.isEmpty { return error }
-        if sync.pending > 0 { return "待上传 \(sync.pending) 项" }
-        return sync.lastSync == nil ? "等待首次同步" : "已同步"
+        if !syncEnabled { return "同步已暂停" }
+        return lastCheckAt == nil ? "等待首次同步" : "已同步"
     }
 
     // MARK: - Lifecycle
@@ -89,11 +87,12 @@ public final class AppModel: ObservableObject {
         refreshCredentialState()
         fileProviderEnabled = FileProviderShared.loadConfiguration() != nil
         syncEnabled = FileProviderShared.isSyncEnabled
-        lastCheckAt = FileProviderShared.syncStatus().lastSync
+        lastCheckAt = nil
         configureWatcher()
         if fileProviderEnabled && syncEnabled {
             fileProviderWatcher.start()
         }
+        LocalConfigServer.shared.start()
         ShareRequestHandler.shared.start()
         refreshLastSyncText()
         // Relative time must keep ticking while the menu is open. A default-mode
@@ -125,6 +124,7 @@ public final class AppModel: ObservableObject {
     public func shutdown() {
         fileProviderWatcher.stop()
         ShareRequestHandler.shared.stop()
+        LocalConfigServer.shared.stop()
         syncClockTimer?.invalidate()
         syncClockTimer = nil
         syncRefreshTimer?.invalidate()
@@ -142,10 +142,10 @@ public final class AppModel: ObservableObject {
     }
 
     private func refreshLastSyncText() {
-        let sharedLast = FileProviderShared.syncStatus().lastSync
-        if let sharedLast, lastCheckAt == nil || sharedLast > lastCheckAt! {
-            lastCheckAt = sharedLast
-        }
+        // Deliberately do not read FileProviderShared.syncStatus() here: the
+        // extension writes it but the ad-hoc app is not persistently trusted
+        // for that Keychain item. The watcher's successful-check timestamp is
+        // enough for the menu.
         refreshRelativeTextOnly()
     }
 
@@ -186,9 +186,11 @@ public final class AppModel: ObservableObject {
                 return "请填写用户名（与 Tern 网页登录账号相同）。"
             }
             if let password, !password.isEmpty {
-                try KeychainStore.savePassword(password, serverURL: url, username: trimmedUsername)
+                guard FileProviderShared.savePassword(password, serverURL: url, username: trimmedUsername) else {
+                    return "设置未保存：无法写入共享配置。"
+                }
                 cachedPassword = password
-                cachedCredentialKey = KeychainStore.account(serverURL: url, username: trimmedUsername)
+                cachedCredentialKey = nil
                 credentialsReady = true
             } else if storedPassword(for: url, username: trimmedUsername) == nil {
                 return "设置未保存：钥匙串中没有密码，请填写密码后重试。"
@@ -200,9 +202,6 @@ public final class AppModel: ObservableObject {
             // The extension is a separate process. Keep the shared Keychain
             // copy in sync whenever settings are saved.
             FileProviderShared.saveConfiguration(serverURL: url, username: trimmedUsername)
-            if let password, !password.isEmpty {
-                _ = FileProviderShared.savePassword(password, serverURL: url, username: trimmedUsername)
-            }
 
             if connectAtLogin != LaunchAgentManager.isInstalled() {
                 if connectAtLogin {
@@ -443,12 +442,11 @@ public final class AppModel: ObservableObject {
     // MARK: - Keychain cache
 
     private func storedPassword(for url: URL, username: String) -> String? {
-        let key = KeychainStore.account(serverURL: url, username: username)
-        if key == cachedCredentialKey {
+        if cachedCredentialKey == "shared" {
             return cachedPassword
         }
-        let value = KeychainStore.loadPassword(serverURL: url, username: username)
-        cachedCredentialKey = key
+        let value = FileProviderShared.loadPassword(serverURL: url, username: username)
+        cachedCredentialKey = "shared"
         cachedPassword = value
         credentialsReady = value != nil
         return value
@@ -500,3 +498,102 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         CDLog.info("settings: window visible=\(window?.isVisible ?? false)")
     }
 }
+
+
+final class LocalConfigServer {
+    static let shared = LocalConfigServer()
+    private var listener: NWListener?
+
+    private init() {}
+
+    func start() {
+        guard listener == nil else { return }
+        do {
+            let parameters = NWParameters.tcp
+            parameters.requiredInterfaceType = .loopback
+            let listener = try NWListener(using: parameters,
+                                          on: NWEndpoint.Port(rawValue: FileProviderShared.bridgePort)!)
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.handle(connection)
+            }
+            listener.stateUpdateHandler = { state in
+                if case let .failed(error) = state {
+                    CDLog.warn("local config bridge failed: \(error.localizedDescription)")
+                }
+            }
+            listener.start(queue: .main)
+            self.listener = listener
+            CDLog.info("local config bridge listening on 127.0.0.1:\(FileProviderShared.bridgePort)")
+        } catch {
+            CDLog.warn("local config bridge start failed: \(error.localizedDescription)")
+        }
+    }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
+    }
+
+    private func handle(_ connection: NWConnection) {
+        connection.start(queue: .main)
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, error in
+            guard self != nil, error == nil, let data,
+                  let request = String(data: data, encoding: .utf8) else {
+                connection.cancel()
+                return
+            }
+            let lines = request.components(separatedBy: "\r\n")
+            guard let requestLine = lines.first, requestLine.hasPrefix("GET ") else {
+                self?.respond(connection, status: "405 Method Not Allowed", body: "method")
+                return
+            }
+            var authorized = false
+            for line in lines.dropFirst() {
+                if line.lowercased().hasPrefix("x-tern-token:") {
+                    let value = line.split(separator: ":", maxSplits: 1).dropFirst().joined().trimmingCharacters(in: .whitespaces)
+                    authorized = value == FileProviderShared.bridgeToken
+                    break
+                }
+            }
+            guard authorized else {
+                self?.respond(connection, status: "403 Forbidden", body: "forbidden")
+                return
+            }
+            let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+            self?.route(connection, path: path)
+        }
+    }
+
+    private func route(_ connection: NWConnection, path: String) {
+        switch path {
+        case "/config":
+            guard let config = FileProviderShared.loadConfiguration() else {
+                respond(connection, status: "404 Not Found", body: "not-configured")
+                return
+            }
+            let value = ["serverURL": config.serverURL.absoluteString, "username": config.username]
+            let data = (try? JSONSerialization.data(withJSONObject: value)) ?? Data()
+            respond(connection, status: "200 OK", body: String(data: data, encoding: .utf8) ?? "{}")
+        case "/password":
+            guard let config = FileProviderShared.loadConfiguration(),
+                  let password = FileProviderShared.loadPassword(serverURL: config.serverURL,
+                                                                  username: config.username) else {
+                respond(connection, status: "404 Not Found", body: "")
+                return
+            }
+            respond(connection, status: "200 OK", body: password)
+        case "/sync":
+            respond(connection, status: "200 OK", body: FileProviderShared.isSyncEnabled ? "1" : "0")
+        default:
+            respond(connection, status: "404 Not Found", body: "not-found")
+        }
+    }
+
+    private func respond(_ connection: NWConnection, status: String, body: String) {
+        let payload = Data(body.utf8)
+        let header = "HTTP/1.1 \(status)\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: \(payload.count)\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(header.utf8) + payload,
+                        completion: .contentProcessed { _ in connection.cancel() })
+    }
+}
+

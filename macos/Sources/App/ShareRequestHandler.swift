@@ -21,7 +21,6 @@ final class ShareRequestHandler {
 
     private var observing = false
     private var presenting = false
-    private var pollTimer: Timer?
 
     private init() {}
 
@@ -36,10 +35,8 @@ final class ShareRequestHandler {
             nil,
             .deliverImmediately
         )
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            Task { @MainActor in ShareRequestHandler.shared.processPending() }
-        }
-        processPending()
+        // No periodic Keychain poll: a pending share request now arrives via
+        // the tern:// URL scheme instead of a shared Keychain item.
     }
 
     func stop() {
@@ -51,8 +48,6 @@ final class ShareRequestHandler {
             nil
         )
         observing = false
-        pollTimer?.invalidate()
-        pollTimer = nil
     }
 
     func processPending() {
@@ -68,6 +63,19 @@ final class ShareRequestHandler {
 
         NSApp.activate(ignoringOtherApps: true)
         showSharePolicy(nodeId: request.nodeId, name: request.name)
+    }
+
+    func handleShareURL(_ url: URL) {
+        guard url.scheme == "tern", url.host == "share",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let nodeId = components.queryItems?.first(where: { $0.name == "nodeId" })?.value,
+              !nodeId.isEmpty else { return }
+        let name = components.queryItems?.first(where: { $0.name == "name" })?.value ?? "Tern 文件"
+        guard !presenting else { return }
+        presenting = true
+        defer { presenting = false }
+        NSApp.activate(ignoringOtherApps: true)
+        showSharePolicy(nodeId: nodeId, name: name)
     }
 
     private func showSharePolicy(nodeId: String, name: String) {
